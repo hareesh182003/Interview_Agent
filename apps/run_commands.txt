@@ -1,0 +1,3 @@
+uvicorn ats_analyzer.asgi:application --reload
+
+python manage.py runserver 8000
