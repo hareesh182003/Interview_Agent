@@ -1,5 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, List
 import os
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ import django
 django.setup()
 
 # Import Django models and services after setup
-from apps.analyzer.models import AnalysisSession
+from apps.analyzer.models import AnalysisSession, QualifiedCandidate
 from apps.analyzer.services.pdf_extractor import PDFExtractor
 from apps.analyzer.services.ai_analyzer import AIAnalyzer
 from api.schemas.response import AnalysisResponse
@@ -61,6 +62,7 @@ async def analyze_resume(
     - **job_description**: Text of the job description
     
     Returns detailed match analysis with percentage score
+    If match percentage > 80%, automatically saves to QualifiedCandidate model
     """
     start_time = time.time()
     
@@ -98,6 +100,24 @@ async def analyze_resume(
             processing_time=time.time() - start_time
         )
         
+        # Check if candidate qualifies (>80%)
+        is_qualified = False
+        if float(session.match_percentage) > 80.0:
+            is_qualified = True
+            # Save to QualifiedCandidate model
+            qualified_candidate = QualifiedCandidate.objects.create(
+                analysis_session=session,
+                resume_text=session.resume_text,
+                job_description=session.job_description,
+                match_percentage=session.match_percentage,
+                matching_skills=session.matching_skills,
+                matching_education=session.matching_education,
+                matching_experience=session.matching_experience,
+                highlighted_strengths=session.highlighted_strengths,
+                identified_gaps=session.identified_gaps
+            )
+            logger.info(f"✅ Qualified candidate saved: {qualified_candidate.id} with {session.match_percentage}% match")
+        
         # Clean up
         os.unlink(tmp_path)
         
@@ -109,7 +129,8 @@ async def analyze_resume(
             matching_experience=session.matching_experience,
             highlighted_strengths=session.highlighted_strengths,
             identified_gaps=session.identified_gaps,
-            processing_time=session.processing_time
+            processing_time=session.processing_time,
+            is_qualified=is_qualified
         )
         
     except Exception as e:
@@ -149,3 +170,132 @@ async def list_analyses(limit: int = 10):
         }
         for s in sessions
     ]
+
+
+@app.get("/api/fastapi/qualified-candidates")
+async def list_qualified_candidates(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    min_percentage: float = Query(80.0, description="Minimum match percentage"),
+    highly_qualified: bool = Query(False, description="Filter for >90% match")
+):
+    """
+    List all qualified candidates (>80% match)
+    
+    Query parameters:
+        - status: Filter by status (NEW, REVIEWED, CONTACTED, etc.)
+        - min_percentage: Minimum match percentage (default: 80)
+        - highly_qualified: Filter for >90% match
+    """
+    queryset = QualifiedCandidate.objects.all()
+    
+    # Apply filters
+    if status:
+        queryset = queryset.filter(status=status.upper())
+    
+    queryset = queryset.filter(match_percentage__gte=min_percentage)
+    
+    if highly_qualified:
+        queryset = queryset.filter(match_percentage__gte=90.0)
+    
+    candidates = queryset[:50]  # Limit to 50 results
+    
+    return [
+        {
+            "id": str(c.id),
+            "match_percentage": float(c.match_percentage),
+            "matching_skills": c.matching_skills,
+            "matching_education": c.matching_education,
+            "matching_experience": c.matching_experience,
+            "highlighted_strengths": c.highlighted_strengths,
+            "identified_gaps": c.identified_gaps,
+            "status": c.status,
+            "is_contacted": c.is_contacted,
+            "qualification_date": c.qualification_date.isoformat(),
+            "is_highly_qualified": c.is_highly_qualified
+        }
+        for c in candidates
+    ]
+
+
+@app.get("/api/fastapi/qualified-candidates/{candidate_id}")
+async def get_qualified_candidate(candidate_id: str):
+    """Retrieve qualified candidate by ID"""
+    try:
+        candidate = QualifiedCandidate.objects.get(id=candidate_id)
+        return {
+            "id": str(candidate.id),
+            "analysis_session_id": str(candidate.analysis_session.id),
+            "match_percentage": float(candidate.match_percentage),
+            "matching_skills": candidate.matching_skills,
+            "matching_education": candidate.matching_education,
+            "matching_experience": candidate.matching_experience,
+            "highlighted_strengths": candidate.highlighted_strengths,
+            "identified_gaps": candidate.identified_gaps,
+            "status": candidate.status,
+            "is_contacted": candidate.is_contacted,
+            "notes": candidate.notes,
+            "qualification_date": candidate.qualification_date.isoformat(),
+            "is_highly_qualified": candidate.is_highly_qualified
+        }
+    except QualifiedCandidate.DoesNotExist:
+        raise HTTPException(status_code=404, detail="Qualified candidate not found")
+
+
+@app.patch("/api/fastapi/qualified-candidates/{candidate_id}")
+async def update_qualified_candidate(
+    candidate_id: str,
+    status: Optional[str] = Form(None),
+    is_contacted: Optional[bool] = Form(None),
+    notes: Optional[str] = Form(None)
+):
+    """
+    Update qualified candidate details
+    
+    Form data:
+        - status: string (NEW, REVIEWED, CONTACTED, INTERVIEWING, HIRED, REJECTED)
+        - is_contacted: boolean
+        - notes: string
+    """
+    try:
+        candidate = QualifiedCandidate.objects.get(id=candidate_id)
+        
+        if status is not None:
+            candidate.status = status.upper()
+        if is_contacted is not None:
+            candidate.is_contacted = is_contacted
+        if notes is not None:
+            candidate.notes = notes
+        
+        candidate.save()
+        
+        return {
+            "id": str(candidate.id),
+            "status": candidate.status,
+            "is_contacted": candidate.is_contacted,
+            "notes": candidate.notes,
+            "message": "Candidate updated successfully"
+        }
+        
+    except QualifiedCandidate.DoesNotExist:
+        raise HTTPException(status_code=404, detail="Qualified candidate not found")
+
+
+@app.get("/api/fastapi/qualified-candidates-stats")
+async def qualified_candidates_stats():
+    """Get statistics about qualified candidates"""
+    total_qualified = QualifiedCandidate.objects.count()
+    highly_qualified = QualifiedCandidate.objects.filter(match_percentage__gte=90.0).count()
+    
+    status_breakdown = {}
+    for status_choice in QualifiedCandidate.STATUS_CHOICES:
+        status_code = status_choice[0]
+        count = QualifiedCandidate.objects.filter(status=status_code).count()
+        status_breakdown[status_code] = count
+    
+    return {
+        "total_qualified_candidates": total_qualified,
+        "highly_qualified_count": highly_qualified,
+        "status_breakdown": status_breakdown,
+        "contacted_count": QualifiedCandidate.objects.filter(is_contacted=True).count(),
+        "not_contacted_count": QualifiedCandidate.objects.filter(is_contacted=False).count()
+    }

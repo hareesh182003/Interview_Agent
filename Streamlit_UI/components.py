@@ -175,3 +175,39 @@ def comparison_card(title: str, match_score: float, color="#6366f1"):
             <h1 style='color:{color}; margin-top:-5px; font-size:3rem;'>{match_score:.0f}%</h1>
         </div>
     """, unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------
+# 10. QUALIFIED BADGE
+# --------------------------------------------------------------
+
+def qualified_badge(match_score: float):
+    """Display qualification badge for candidates with >80% match"""
+    if match_score > 90:
+        badge_color = "#10b981"
+        badge_text = "⭐ HIGHLY QUALIFIED"
+        badge_desc = "Outstanding match! This candidate exceeds all requirements."
+    elif match_score > 80:
+        badge_color = "#3b82f6"
+        badge_text = "✓ QUALIFIED"
+        badge_desc = "Great match! This candidate meets the job requirements."
+    else:
+        return
+    
+    st.markdown(f"""
+    <div style='
+        background: linear-gradient(135deg, {badge_color}15, {badge_color}25);
+        border: 2px solid {badge_color};
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1rem 0 2rem 0;
+        text-align: center;
+        animation: pulseGlow 2s infinite ease-in-out;
+    '>
+        <h2 style='color:{badge_color}; margin:0; font-size:2rem; font-weight:900;'>{badge_text}</h2>
+        <p style='color:#cbd5e1; margin:0.5rem 0 0 0; font-size:1.1rem;'>{badge_desc}</p>
+        <p style='color:#94a3b8; margin:0.5rem 0 0 0; font-size:0.9rem;'>
+            This resume has been automatically saved to the Qualified Candidates database.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)

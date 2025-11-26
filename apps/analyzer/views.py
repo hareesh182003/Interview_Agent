@@ -1,18 +1,19 @@
 from django.shortcuts import render
-
-# Create your views here.
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 import time
 import logging
 
-from .models import AnalysisSession
+from .models import AnalysisSession, QualifiedCandidate
 from .serializers import (
     AnalysisRequestSerializer,
     AnalysisResponseSerializer,
-    AnalysisSessionSerializer
+    AnalysisSessionSerializer,
+    QualifiedCandidateSerializer,
+    QualifiedCandidateListSerializer
 )
 from .services.pdf_extractor import PDFExtractor
 from .services.ai_analyzer import AIAnalyzer
@@ -40,6 +41,7 @@ def analyze_resume(request):
         - highlighted_strengths: list
         - identified_gaps: list
         - processing_time: float
+        - is_qualified: boolean (True if >80%)
     """
     start_time = time.time()
     
@@ -83,6 +85,25 @@ def analyze_resume(request):
             processing_time=time.time() - start_time
         )
         
+        # Check if candidate qualifies (>80%)
+        is_qualified = False
+        if float(session.match_percentage) > 80.0:
+            is_qualified = True
+            # Save to QualifiedCandidate model
+            qualified_candidate = QualifiedCandidate.objects.create(
+                analysis_session=session,
+                resume_file=session.resume_file,
+                resume_text=session.resume_text,
+                job_description=session.job_description,
+                match_percentage=session.match_percentage,
+                matching_skills=session.matching_skills,
+                matching_education=session.matching_education,
+                matching_experience=session.matching_experience,
+                highlighted_strengths=session.highlighted_strengths,
+                identified_gaps=session.identified_gaps
+            )
+            logger.info(f"Qualified candidate saved: {qualified_candidate.id} with {session.match_percentage}% match")
+        
         # Clean up temp file
         default_storage.delete(file_path)
         
@@ -96,7 +117,8 @@ def analyze_resume(request):
             'highlighted_strengths': session.highlighted_strengths,
             'identified_gaps': session.identified_gaps,
             'processing_time': session.processing_time,
-            'created_at': session.created_at
+            'created_at': session.created_at,
+            'is_qualified': is_qualified
         }
         
         response_serializer = AnalysisResponseSerializer(response_data)
@@ -142,6 +164,120 @@ def list_analyses(request):
     sessions = AnalysisSession.objects.all()
     serializer = AnalysisSessionSerializer(sessions, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+def list_qualified_candidates(request):
+    """
+    List all qualified candidates (>80% match)
+    
+    GET /api/django/qualified-candidates/
+    
+    Query parameters:
+        - status: Filter by status (NEW, REVIEWED, CONTACTED, etc.)
+        - min_percentage: Minimum match percentage (default: 80)
+        - highly_qualified: true/false - Filter for >90% match
+    """
+    queryset = QualifiedCandidate.objects.all()
+    
+    # Filter by status
+    status_filter = request.query_params.get('status')
+    if status_filter:
+        queryset = queryset.filter(status=status_filter.upper())
+    
+    # Filter by minimum percentage
+    min_percentage = request.query_params.get('min_percentage', 80)
+    try:
+        queryset = queryset.filter(match_percentage__gte=float(min_percentage))
+    except ValueError:
+        pass
+    
+    # Filter for highly qualified (>90%)
+    highly_qualified = request.query_params.get('highly_qualified')
+    if highly_qualified and highly_qualified.lower() == 'true':
+        queryset = queryset.filter(match_percentage__gte=90.0)
+    
+    serializer = QualifiedCandidateListSerializer(queryset, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+def get_qualified_candidate(request, candidate_id):
+    """
+    Retrieve qualified candidate by ID
+    
+    GET /api/django/qualified-candidates/{candidate_id}/
+    """
+    try:
+        candidate = QualifiedCandidate.objects.get(id=candidate_id)
+        serializer = QualifiedCandidateSerializer(candidate)
+        return Response(serializer.data)
+    except QualifiedCandidate.DoesNotExist:
+        return Response(
+            {'error': 'Qualified candidate not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['PATCH'])
+def update_qualified_candidate(request, candidate_id):
+    """
+    Update qualified candidate details
+    
+    PATCH /api/django/qualified-candidates/{candidate_id}/
+    
+    Body (JSON):
+        - status: string (NEW, REVIEWED, CONTACTED, INTERVIEWING, HIRED, REJECTED)
+        - is_contacted: boolean
+        - notes: string
+    """
+    try:
+        candidate = QualifiedCandidate.objects.get(id=candidate_id)
+        serializer = QualifiedCandidateSerializer(
+            candidate, 
+            data=request.data, 
+            partial=True
+        )
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        
+        return Response(
+            serializer.errors, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        
+    except QualifiedCandidate.DoesNotExist:
+        return Response(
+            {'error': 'Qualified candidate not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['GET'])
+def qualified_candidates_stats(request):
+    """
+    Get statistics about qualified candidates
+    
+    GET /api/django/qualified-candidates/stats/
+    """
+    total_qualified = QualifiedCandidate.objects.count()
+    highly_qualified = QualifiedCandidate.objects.filter(match_percentage__gte=90.0).count()
+    
+    status_breakdown = {}
+    for status_choice in QualifiedCandidate.STATUS_CHOICES:
+        status_code = status_choice[0]
+        count = QualifiedCandidate.objects.filter(status=status_code).count()
+        status_breakdown[status_code] = count
+    
+    return Response({
+        'total_qualified_candidates': total_qualified,
+        'highly_qualified_count': highly_qualified,
+        'status_breakdown': status_breakdown,
+        'contacted_count': QualifiedCandidate.objects.filter(is_contacted=True).count(),
+        'not_contacted_count': QualifiedCandidate.objects.filter(is_contacted=False).count()
+    })
 
 
 @api_view(['GET'])
