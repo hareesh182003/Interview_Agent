@@ -148,3 +148,41 @@ def prepare_comparison_payload(results_list):
             "gaps": r.get("identified_gaps", []),
         })
     return payload
+
+
+# ---------------------------------------------------------
+# 🔵 QUALIFIED CANDIDATE HELPERS
+# ---------------------------------------------------------
+def is_qualified(match_percentage: float) -> bool:
+    """Check if resume qualifies (>80%)"""
+    return float(match_percentage) > 80.0
+
+
+def is_highly_qualified(match_percentage: float) -> bool:
+    """Check if resume is highly qualified (>90%)"""
+    return float(match_percentage) >= 90.0
+
+
+def get_qualification_tier(match_percentage: float) -> str:
+    """Return qualification tier based on score"""
+    score = float(match_percentage)
+    if score >= 95:
+        return "EXCEPTIONAL"
+    elif score >= 90:
+        return "HIGHLY QUALIFIED"
+    elif score >= 85:
+        return "STRONG MATCH"
+    elif score > 80:
+        return "QUALIFIED"
+    else:
+        return "NOT QUALIFIED"
+
+
+def format_candidate_summary(candidate: dict) -> str:
+    """Format candidate info for display"""
+    return f"""
+    Match: {candidate['match_percentage']}%
+    Status: {candidate['status']}
+    Skills: {len(candidate.get('matching_skills', []))}
+    Qualified: {candidate['qualification_date'][:10]}
+    """

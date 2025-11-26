@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AnalysisSession
+from .models import AnalysisSession, QualifiedCandidate
 
 
 class AnalysisSessionSerializer(serializers.ModelSerializer):
@@ -73,3 +73,55 @@ class AnalysisResponseSerializer(serializers.Serializer):
     identified_gaps = serializers.ListField(child=serializers.CharField())
     processing_time = serializers.FloatField()
     created_at = serializers.DateTimeField()
+    is_qualified = serializers.BooleanField(default=False)
+
+
+class QualifiedCandidateSerializer(serializers.ModelSerializer):
+    """Serializer for qualified candidate model"""
+    
+    analysis_session_id = serializers.UUIDField(source='analysis_session.id', read_only=True)
+    is_highly_qualified = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = QualifiedCandidate
+        fields = [
+            'id',
+            'analysis_session_id',
+            'resume_file',
+            'resume_text',
+            'job_description',
+            'match_percentage',
+            'matching_skills',
+            'matching_education',
+            'matching_experience',
+            'highlighted_strengths',
+            'identified_gaps',
+            'qualification_date',
+            'is_contacted',
+            'notes',
+            'status',
+            'is_highly_qualified'
+        ]
+        read_only_fields = [
+            'id',
+            'analysis_session_id',
+            'qualification_date',
+            'is_highly_qualified'
+        ]
+
+
+class QualifiedCandidateListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for listing qualified candidates"""
+    
+    is_highly_qualified = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = QualifiedCandidate
+        fields = [
+            'id',
+            'match_percentage',
+            'qualification_date',
+            'status',
+            'is_contacted',
+            'is_highly_qualified'
+        ]
